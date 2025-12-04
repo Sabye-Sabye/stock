@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
   <meta charset="UTF-8" />
-  <title>พอร์ตหุ้น + Trailing Stop (30 วัน)</title>
+  <title>พอร์ตหุ้น + Trailing Stop (Highest Since Buy)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
   <!-- รองรับเปิดบน iPhone / Add to Home Screen -->
@@ -104,9 +104,11 @@
     th:nth-child(1),
     th:nth-child(2),
     th:nth-child(3),
+    th:nth-child(4),
     td:nth-child(1),
     td:nth-child(2),
-    td:nth-child(3) {
+    td:nth-child(3),
+    td:nth-child(4) {
       text-align: left;
     }
 
@@ -164,10 +166,11 @@
   </style>
 </head>
 <body>
-  <h1>พอร์ตหุ้น + Trailing Stop (30 วัน)</h1>
+  <h1>พอร์ตหุ้น + Trailing Stop (Highest Since Buy)</h1>
   <div class="note">
     📱 แนะนำให้เปิดจาก iPhone แล้วใช้ <b>“Add to Home Screen”</b> เพื่อใช้งานเหมือนแอป<br />
-    ✳️ ราคาปัจจุบันและ Highest 30 วันจะอิงจาก <b>ราคาที่คุณกรอกเอง</b> ทุกครั้งที่มีการอัปเดตราคาใหม่
+    ✳️ ราคาปัจจุบันและ Highest Since Buy จะอิงจาก <b>ราคาที่คุณกรอกเอง</b> ในแต่ละครั้งที่อัปเดต<br />
+    ✳️ Highest Since Buy = ราคาสูงสุดจากประวัติราคาที่กรอก ตั้งแต่วันที่ซื้อเป็นต้นมา
   </div>
 
   <div class="card">
@@ -186,6 +189,10 @@
         <input id="buyPrice" type="number" step="0.01" min="0" required />
       </div>
       <div class="field">
+        <label for="buyDate">วันที่ซื้อ</label>
+        <input id="buyDate" type="date" />
+      </div>
+      <div class="field">
         <label for="currentPrice">ราคาปัจจุบัน (บาท)</label>
         <input id="currentPrice" type="number" step="0.01" min="0" />
       </div>
@@ -201,7 +208,7 @@
     <h2>รายการหุ้นในพอร์ต</h2>
     <div class="small">
       - ระบบจะจำข้อมูลใน browser (localStorage)<br />
-      - Highest 30 วัน = ราคาสูงสุดจากประวัติราคาที่คุณกรอกไว้ในช่วง 30 วันที่ผ่านมา<br />
+      - วันที่ซื้อ จะใช้เป็นจุดเริ่มต้นในการดู Highest Since Buy จากประวัติราคาที่คุณอัปเดต<br />
       - แก้ราคาปัจจุบันได้ในตาราง ระบบจะคำนวณกำไร/ขาดทุนและ Trailing Stop ใหม่ให้อัตโนมัติ
     </div>
     <div style="overflow-x: auto; max-height: 60vh; margin-top: 10px;">
@@ -210,6 +217,7 @@
           <tr>
             <th>ลบ</th>
             <th>หุ้น</th>
+            <th>วันที่ซื้อ</th>
             <th>จำนวน</th>
             <th>ราคาซื้อ</th>
             <th>ราคาปัจจุบัน</th>
@@ -217,7 +225,7 @@
             <th>มูลค่าปัจจุบัน</th>
             <th>กำไร/ขาดทุน</th>
             <th>% P/L</th>
-            <th>Highest 30d</th>
+            <th>Highest Since Buy</th>
             <th>Trailing %</th>
             <th>Trailing Stop</th>
           </tr>
@@ -231,7 +239,6 @@
 
   <script>
     const DEFAULT_TRAILING_PERCENT = 10;
-    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
     // ====== Data Model & Storage ======
     let portfolio = normalizePortfolio(loadPortfolio());
@@ -247,10 +254,34 @@
       }
     }
 
+    function getHighestSinceBuy(stock) {
+      const history = stock.history || [];
+      if (history.length === 0) return null;
+
+      let buyTime = null;
+      if (stock.buyDate) {
+        const t = new Date(stock.buyDate).getTime();
+        if (!isNaN(t)) buyTime = t;
+      }
+
+      const filtered = history.filter((p) => {
+        if (buyTime == null) return true;
+        return p.time >= buyTime;
+      });
+
+      if (filtered.length === 0) return null;
+
+      return filtered.reduce(
+        (max, p) => (p.price > max ? p.price : max),
+        filtered[0].price
+      );
+    }
+
     function normalizePortfolio(pf) {
       const now = Date.now();
       return (pf || []).map((s) => {
         let history = s.history || [];
+
         // ถ้าไม่มี history แต่มีราคาปัจจุบันหรือ highest เดิม ให้สร้าง history เริ่มต้นให้
         if (history.length === 0) {
           if (s.currentPrice != null && !isNaN(Number(s.currentPrice))) {
@@ -259,24 +290,19 @@
             history.push({ time: now, price: Number(s.highestPrice) });
           }
         }
-        // ตัด history เกิน 30 วันทิ้ง
-        const filtered = history.filter((p) => now - p.time <= THIRTY_DAYS_MS);
-        let highest = null;
-        if (filtered.length > 0) {
-          highest = filtered.reduce(
-            (max, p) => (p.price > max ? p.price : max),
-            filtered[0].price
-          );
-        }
+
+        const highest = getHighestSinceBuy({ ...s, history });
+
         return {
           id: s.id || Date.now().toString(),
           symbol: s.symbol,
           shares: s.shares,
           buyPrice: s.buyPrice,
+          buyDate: s.buyDate || "", // เก็บเป็น string yyyy-mm-dd
           currentPrice: s.currentPrice ?? null,
           trailingPercent: s.trailingPercent ?? DEFAULT_TRAILING_PERCENT,
-          history: filtered,
-          highestPrice: highest, // ความหมาย: highest 30 วัน
+          history,
+          highestPrice: highest,
         };
       });
     }
@@ -300,7 +326,10 @@
     function updateStock(id, changes) {
       portfolio = portfolio.map((s) => {
         if (s.id === id) {
-          return { ...s, ...changes };
+          const merged = { ...s, ...changes };
+          // ทุกครั้งที่เปลี่ยน buyDate หรือ history ให้คำนวณ highest ใหม่
+          merged.highestPrice = getHighestSinceBuy(merged);
+          return merged;
         }
         return s;
       });
@@ -313,29 +342,18 @@
       portfolio = portfolio.map((s) => {
         if (s.id !== id) return s;
 
-        const history = s.history || [];
-        // ไม่ต้องเก็บถ้ากรอกว่าง
         if (newPrice == null || isNaN(newPrice)) {
-          return { ...s, currentPrice: null };
+          // ถ้าลบราคาปัจจุบัน ไม่เพิ่ม history ใหม่
+          const tmp = { ...s, currentPrice: null };
+          tmp.highestPrice = getHighestSinceBuy(tmp);
+          return tmp;
         }
 
+        const history = s.history || [];
         const extended = [...history, { time: now, price: newPrice }];
-        const filtered = extended.filter((p) => now - p.time <= THIRTY_DAYS_MS);
-
-        let highest = newPrice;
-        if (filtered.length > 0) {
-          highest = filtered.reduce(
-            (max, p) => (p.price > max ? p.price : max),
-            filtered[0].price
-          );
-        }
-
-        return {
-          ...s,
-          currentPrice: newPrice,
-          history: filtered,
-          highestPrice: highest,
-        };
+        const tmp = { ...s, currentPrice: newPrice, history: extended };
+        tmp.highestPrice = getHighestSinceBuy(tmp);
+        return tmp;
       });
 
       savePortfolio();
@@ -351,6 +369,17 @@
       });
     }
 
+    function formatDateStr(dateStr) {
+      if (!dateStr) return "-";
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return dateStr;
+      // แสดงเป็น dd/mm/yyyy
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const yyyy = d.getFullYear();
+      return `${dd}/${mm}/${yyyy}`;
+    }
+
     function renderTable() {
       const tbody = document.getElementById("portfolio-body");
       tbody.innerHTML = "";
@@ -361,6 +390,7 @@
           symbol,
           shares,
           buyPrice,
+          buyDate,
           currentPrice,
           highestPrice,
           trailingPercent,
@@ -383,7 +413,7 @@
         const highestNum =
           highestPrice != null && !isNaN(highestPrice)
             ? Number(highestPrice)
-            : currentNum;
+            : null;
         const trailPercent =
           trailingPercent != null ? Number(trailingPercent) : DEFAULT_TRAILING_PERCENT;
 
@@ -404,6 +434,11 @@
         const tdSymbol = document.createElement("td");
         tdSymbol.innerHTML = `<span class="tag">${symbol}</span>`;
         tr.appendChild(tdSymbol);
+
+        // วันที่ซื้อ
+        const tdBuyDate = document.createElement("td");
+        tdBuyDate.textContent = formatDateStr(buyDate);
+        tr.appendChild(tdBuyDate);
 
         // จำนวน
         const tdShares = document.createElement("td");
@@ -466,7 +501,7 @@
         }
         tr.appendChild(tdPLPercent);
 
-        // Highest 30d
+        // Highest Since Buy
         const tdHigh = document.createElement("td");
         tdHigh.textContent =
           highestNum != null && !isNaN(highestNum)
@@ -518,6 +553,7 @@
         const symbol = document.getElementById("symbol").value.trim().toUpperCase();
         const shares = Number(document.getElementById("shares").value);
         const buyPrice = Number(document.getElementById("buyPrice").value);
+        const buyDate = document.getElementById("buyDate").value; // yyyy-mm-dd หรือ ""
         const currentPriceInput = document.getElementById("currentPrice").value;
         const currentPrice =
           currentPriceInput === "" ? null : Number(currentPriceInput);
@@ -535,22 +571,25 @@
 
         const now = Date.now();
         let history = [];
-        let highest = null;
-
         if (currentPrice != null && !isNaN(currentPrice)) {
-          history = [{ time: now, price: currentPrice }];
-          highest = currentPrice;
+          history.push({ time: now, price: currentPrice });
         }
 
-        const newStock = {
+        const tempStock = {
           id: Date.now().toString(),
           symbol,
           shares,
           buyPrice,
+          buyDate,
           currentPrice,
-          highestPrice: highest, // highest ใน 30 วัน (ตอนนี้มีจุดเดียว)
           trailingPercent,
           history,
+        };
+        const highest = getHighestSinceBuy(tempStock);
+
+        const newStock = {
+          ...tempStock,
+          highestPrice: highest,
         };
 
         addStock(newStock);
@@ -559,6 +598,7 @@
         document.getElementById("symbol").value = "";
         document.getElementById("shares").value = "";
         document.getElementById("buyPrice").value = "";
+        document.getElementById("buyDate").value = "";
         document.getElementById("currentPrice").value = "";
         // trailingPercent คงค่าเดิมไว้
       });
